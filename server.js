@@ -19,7 +19,6 @@ let friendsData = {};
 try {
     if (fs.existsSync(FRIENDS_STORAGE)) {
         const raw = JSON.parse(fs.readFileSync(FRIENDS_STORAGE));
-        // Migrate from old Set format (array of IDs) to new object format
         if (Array.isArray(raw)) {
             raw.forEach(id => { friendsData[id] = { status: 'accepted', since: Date.now() }; });
         } else {
@@ -27,6 +26,7 @@ try {
         }
     }
 } catch (e) {}
+
 let dmMetadata = {};
 try { if (fs.existsSync(DM_STORAGE)) dmMetadata = JSON.parse(fs.readFileSync(DM_STORAGE)); } catch (e) {}
 
@@ -63,7 +63,6 @@ async function formatMessage(m) {
                     content: fetchedRef.cleanContent?.substring(0, 50) || '...'
                 };
             } catch (e) {
-                // Fallback if message deleted or not accessible
                 refMsg = {
                     author: m.mentions?.repliedUser?.username || 'User',
                     authorAvatar: getAvatar(m.mentions?.repliedUser),
@@ -96,58 +95,49 @@ client.on('ready', () => {
 });
 
 client.on('messageCreate', async m => {
-    if (m.channel.type === 1) {
-        const id = m.author.bot ? m.channel.recipientId : m.author.id;
-        if (id) {
-            if (!dmMetadata[id]) dmMetadata[id] = { lastInteraction: 0, unreadCount: 0 };
-            dmMetadata[id].lastInteraction = Date.now();
-            if (!m.author.bot) {
-                dmMetadata[id].unreadCount = (dmMetadata[id].unreadCount || 0) + 1;
+    try {
+        if (m.channel.type === 1) {
+            const id = m.author.bot ? m.channel.recipientId : m.author.id;
+            if (id) {
+                if (!dmMetadata[id]) dmMetadata[id] = { lastInteraction: 0, unreadCount: 0 };
+                dmMetadata[id].lastInteraction = Date.now();
+                if (!m.author.bot) {
+                    dmMetadata[id].unreadCount = (dmMetadata[id].unreadCount || 0) + 1;
+                }
+                saveDMs();
+                io.emit('refreshSidebar');
             }
-            saveDMs();
-            io.emit('refreshSidebar');
         }
-    }
-    const msg = await formatMessage(m);
-    if (msg) io.emit('discordMessage', msg);
+        const msg = await formatMessage(m);
+        if (msg) io.emit('discordMessage', msg);
+    } catch(e) {}
 });
 
-// Handle Accept/Decline button clicks from Discord
 client.on('interactionCreate', async interaction => {
-    if (!interaction.isButton()) return;
-    const cid = interaction.customId;
-    
-    if (cid.startsWith('friend_accept_')) {
-        const botId = cid.replace('friend_accept_', '');
-        if (botId !== client.user.id) return;
+    try {
+        if (!interaction.isButton()) return;
+        const cid = interaction.customId;
         
-        const userId = interaction.user.id;
-        // Mark as accepted on our side
-        if (!friendsData[userId]) {
-            friendsData[userId] = { status: 'accepted', since: Date.now() };
-        } else {
-            friendsData[userId].status = 'accepted';
-        }
-        saveFriends();
-        // Add to DMs
-        if (!dmMetadata[userId]) { dmMetadata[userId] = { lastInteraction: Date.now(), unreadCount: 0 }; saveDMs(); }
-        
-        await interaction.update({ content: `✅ You are now friends with **${client.user.username}**!`, components: [] });
-        io.emit('refreshSidebar');
-    }
-    
-    if (cid.startsWith('friend_decline_')) {
-        const botId = cid.replace('friend_decline_', '');
-        if (botId !== client.user.id) return;
-        
-        const userId = interaction.user.id;
-        if (friendsData[userId]) {
-            delete friendsData[userId];
+        if (cid.startsWith('friend_accept_')) {
+            const botId = cid.replace('friend_accept_', '');
+            if (botId !== client.user.id) return;
+            const userId = interaction.user.id;
+            if (!friendsData[userId]) friendsData[userId] = { status: 'accepted', since: Date.now() };
+            else friendsData[userId].status = 'accepted';
             saveFriends();
+            if (!dmMetadata[userId]) { dmMetadata[userId] = { lastInteraction: Date.now(), unreadCount: 0 }; saveDMs(); }
+            await interaction.update({ content: `✅ You are now friends with **${client.user.username}**!`, components: [] });
+            io.emit('refreshSidebar');
         }
         
-        await interaction.update({ content: `❌ Friend request from **${client.user.username}** declined.`, components: [] });
-    }
+        if (cid.startsWith('friend_decline_')) {
+            const botId = cid.replace('friend_decline_', '');
+            if (botId !== client.user.id) return;
+            const userId = interaction.user.id;
+            if (friendsData[userId]) { delete friendsData[userId]; saveFriends(); }
+            await interaction.update({ content: `❌ Friend request from **${client.user.username}** declined.`, components: [] });
+        }
+    } catch(e) {}
 });
 
 io.on('connection', (socket) => {
@@ -201,30 +191,20 @@ io.on('connection', (socket) => {
     });
 
     socket.on('addFriend', async (id) => {
-        if (!id) return;
-        // Don't re-send if already friends or already pending
-        if (friendsData[id]) {
-            socket.emit('friendError', `Already ${friendsData[id].status === 'accepted' ? 'friends' : 'pending'} with this user.`);
-            return;
-        }
-        friendsData[id] = { status: 'pending_outgoing', since: Date.now() };
-        saveFriends();
-        // Send them a DM with Accept/Decline buttons
         try {
+            if (!id) return;
+            if (friendsData[id]) return;
+            friendsData[id] = { status: 'pending_outgoing', since: Date.now() };
+            saveFriends();
             const user = await client.users.fetch(id);
-            const botName = client.user.username;
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId(`friend_accept_${client.user.id}`).setLabel('Accept').setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId(`friend_decline_${client.user.id}`).setLabel('Decline').setStyle(ButtonStyle.Danger)
             );
             const dm = await user.createDM();
-            await dm.send({ content: `👋 **${botName}** wants to add you as a friend!`, components: [row] });
-            socket.emit('friendRequestSent', { id, username: user.username });
-        } catch (e) {
-            console.log(`Could not send friend request to ${id}:`, e.message);
-            socket.emit('friendError', `Could not reach this user (DMs may be closed).`);
-        }
-        io.emit('refreshSidebar');
+            await dm.send({ content: `👋 **${client.user.username}** wants to add you as a friend!`, components: [row] });
+            io.emit('refreshSidebar');
+        } catch(e) {}
     });
 
     socket.on('acceptFriend', (id) => {
@@ -237,50 +217,11 @@ io.on('connection', (socket) => {
     });
 
     socket.on('declineFriend', (id) => {
-        if (friendsData[id]) {
-            delete friendsData[id];
-            saveFriends();
-        }
+        if (friendsData[id]) { delete friendsData[id]; saveFriends(); }
     });
-    socket.on('markAsRead', (id) => { if (dmMetadata[id]) { dmMetadata[id].unreadCount = 0; saveDMs(); io.emit('refreshSidebar'); } });
 
     socket.on('removeDM', (id) => {
-        if (dmMetadata[id]) {
-            delete dmMetadata[id];
-            saveDMs();
-            socket.emit('refreshSidebar');
-        }
-    });
-
-    socket.on('getChannelMembers', async (data) => {
-        try {
-            const { channelId, isDM, query } = data;
-            let members = [];
-            if (isDM) {
-                // For DMs, return the recipient
-                try {
-                    const user = await client.users.fetch(channelId);
-                    members.push({ id: user.id, username: user.username, avatar: getAvatar(user) });
-                } catch(e) {}
-            } else {
-                // For server channels, get guild members
-                try {
-                    const channel = await client.channels.fetch(channelId);
-                    if (channel?.guild) {
-                        const guildMembers = await channel.guild.members.fetch({ limit: 50 });
-                        guildMembers.forEach(m => {
-                            members.push({ id: m.id, username: m.user.username, displayName: m.displayName, avatar: getAvatar(m.user) });
-                        });
-                    }
-                } catch(e) {}
-            }
-            // Filter by query if provided
-            if (query) {
-                const q = query.toLowerCase();
-                members = members.filter(m => m.username.toLowerCase().includes(q) || (m.displayName && m.displayName.toLowerCase().includes(q)));
-            }
-            socket.emit('channelMembers', members.slice(0, 20));
-        } catch(e) {}
+        if (dmMetadata[id]) { delete dmMetadata[id]; saveDMs(); socket.emit('refreshSidebar'); }
     });
 
     socket.on('getUserProfile', async (id) => {
@@ -307,6 +248,34 @@ io.on('connection', (socket) => {
             }
             socket.emit('history', { id, history: history.reverse() });
         } catch (e) {}
+    });
+
+    socket.on('getChannelMembers', async (data) => {
+        try {
+            const { channelId, isDM, query } = data;
+            let members = [];
+            if (isDM) {
+                try {
+                    const user = await client.users.fetch(channelId);
+                    members.push({ id: user.id, username: user.username, avatar: getAvatar(user) });
+                } catch(e) {}
+            } else {
+                try {
+                    const channel = await client.channels.fetch(channelId);
+                    if (channel?.guild) {
+                        const guildMembers = await channel.guild.members.fetch({ limit: 50 });
+                        guildMembers.forEach(m => {
+                            members.push({ id: m.id, username: m.user.username, displayName: m.displayName, avatar: getAvatar(m.user) });
+                        });
+                    }
+                } catch(e) {}
+            }
+            if (query) {
+                const q = query.toLowerCase();
+                members = members.filter(m => m.username.toLowerCase().includes(q) || (m.displayName && m.displayName.toLowerCase().includes(q)));
+            }
+            socket.emit('channelMembers', members.slice(0, 20));
+        } catch(e) {}
     });
 
     socket.on('webMessage', async (data) => {
