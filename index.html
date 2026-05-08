@@ -312,17 +312,28 @@
         socket.on('sidebarUpdate', (data) => {
             sidebarContent.innerHTML = '';
             if (data.type === 'dm') {
+                // Render Top Items (Friends, Nitro, etc)
                 data.items.forEach(item => {
                     const div = document.createElement('div');
-                    div.className = 'sidebar-item';
-                    div.innerHTML = `<span>${item.icon}</span> ${item.name}`;
+                    div.className = `sidebar-item ${currentTab !== 'server' && !activeId ? 'active' : ''}`;
+                    div.innerHTML = `<span style="font-size: 20px; margin-right: 4px;">${item.icon}</span> <span class="dm-name">${item.name}</span>`;
                     if (item.id === 'friends') div.onclick = openFriends;
                     sidebarContent.appendChild(div);
                 });
+
                 const header = document.createElement('div');
                 header.className = 'category-header';
-                header.innerHTML = `DIRECT MESSAGES <span onclick="addPerson()" style="float:right;cursor:pointer;font-size:16px;">+</span>`;
+                header.innerHTML = `DIRECT MESSAGES <span onclick="addPerson()" style="float:right;cursor:pointer;font-size:14px;color:var(--text-muted);">+</span>`;
                 sidebarContent.appendChild(header);
+
+                if (data.dms.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'system-message';
+                    empty.style.fontSize = '12px';
+                    empty.innerText = 'No conversations yet. Add a friend to start chatting!';
+                    sidebarContent.appendChild(empty);
+                }
+
                 data.dms.forEach(dm => {
                     const div = document.createElement('div');
                     div.className = `sidebar-item dm ${dm.unreadCount > 0 ? 'unread' : ''} ${activeId === dm.id ? 'active' : ''}`;
