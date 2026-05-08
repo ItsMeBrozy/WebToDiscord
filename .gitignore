@@ -1,0 +1,5 @@
+node_modules/
+.env
+friends.json
+dms_v2.json
+package-lock.json

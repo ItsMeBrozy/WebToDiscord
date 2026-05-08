@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Pro</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Profile Popout Modal -->
+        <div id="profile-popout" class="profile-modal" style="display: none;">
+            <div class="profile-banner" id="p-banner"></div>
+            <div class="profile-header">
+                <img src="" id="p-avatar" class="large-avatar">
+                <div class="profile-badge-row" id="p-badges"></div>
+            </div>
+            <div class="profile-body">
+                <h2 id="p-display-name">Display Name</h2>
+                <div id="p-username" class="p-username">username</div>
+                <div class="p-divider"></div>
+                <div class="p-section">
+                    <h3>MUTUAL SERVERS</h3>
+                    <div id="p-mutual-servers">0 Mutual Servers</div>
+                </div>
+                <div class="p-input-wrap">
+                    <input type="text" id="p-quick-dm" placeholder="Message @username">
+                </div>
+            </div>
+            <div class="profile-close-group">
+                <div class="p-add-btn" id="p-add-trigger" title="Add Friend">👤+</div>
+                <div class="profile-close" onclick="closeProfile()">✕</div>
+            </div>
+        </div>
+
+        <!-- Guilds Bar -->
+        <nav class="guilds-bar">
+            <div class="guild-icon dm-icon active" id="dm-nav-btn" onclick="loadDMs()">
+                <img src="https://cdn.discordapp.com/embed/avatars/0.png" width="28">
+            </div>
+            <div class="guild-separator"></div>
+            <div id="guild-list"></div>
+        </nav>
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <header class="sidebar-header" id="sidebar-header">
+                <button class="search-btn">Find or start a conversation</button>
+            </header>
+            <div class="sidebar-scroll" id="sidebar-content"></div>
+            <div class="user-panel">
+                <div class="user-info">
+                    <img src="https://cdn.discordapp.com/embed/avatars/0.png" class="user-avatar">
+                    <div class="user-details">
+                        <div class="user-name">Steinbrücke</div>
+                        <div class="user-status-text">Online</div>
+                    </div>
+                </div>
+                <div class="user-controls">
+                    <button class="control-btn">🎤</button>
+                    <button class="control-btn">🎧</button>
+                    <button class="control-btn">⚙️</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Area -->
+        <main class="chat-area" id="chat-area">
+            <header class="chat-header">
+                <div class="channel-info">
+                    <span class="hashtag" id="header-icon">@</span>
+                    <h2 id="current-channel-name">Direct Messages</h2>
+                </div>
+            </header>
+            <div class="chat-window" id="chat-window"></div>
+            <div class="input-area">
+                <div id="mention-popup" class="mention-popup" style="display:none;"></div>
+                <div class="input-wrapper">
+                    <div id="reply-preview" class="reply-bar" style="display: none;">
+                        <span id="reply-text"></span>
+                        <span class="close-reply" onclick="cancelReply()">✕</span>
+                    </div>
+                    <form id="message-form" class="input-row">
+                        <button type="button" class="attach-btn">+</button>
+                        <input type="text" id="message-input" placeholder="Select a conversation" disabled autocomplete="off">
+                    </form>
+                </div>
+            </div>
+        </main>
+
+        <!-- Friends View -->
+        <main class="friends-area" id="friends-area" style="display: none;">
+            <div class="friends-main">
+                <header class="friends-header">
+                    <div class="f-header-left">
+                        <span class="f-icon">👤</span>
+                        <span class="f-title">Friends</span>
+                        <div class="f-tabs">
+                            <button class="f-tab active">Online</button>
+                            <button class="f-tab">All</button>
+                            <button class="f-tab">Pending</button>
+                            <button class="f-tab">Blocked</button>
+                            <button class="f-tab add" onclick="addPerson()">Add Friend</button>
+                        </div>
+                    </div>
+                </header>
+                <div class="friends-content">
+                    <div class="friends-search">
+                        <input type="text" placeholder="Search">
+                    </div>
+                    <div class="friends-list-header" id="friends-online-count">Online — 0</div>
+                    <div class="friends-list" id="friends-list"></div>
+                </div>
+            </div>
+            <div class="active-now">
+                <h3>Active Now</h3>
+                <div id="active-now-list">
+                    <div class="empty-active">It's quiet for now...</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const socket = io();
+        const chatWindow = document.getElementById('chat-window');
+        const sidebarContent = document.getElementById('sidebar-content');
+        const guildList = document.getElementById('guild-list');
+        const sidebarHeader = document.getElementById('sidebar-header');
+        const messageInput = document.getElementById('message-input');
+        const currentChannelName = document.getElementById('current-channel-name');
+        const replyPreview = document.getElementById('reply-preview');
+        const replyText = document.getElementById('reply-text');
+        const chatArea = document.getElementById('chat-area');
+        const friendsArea = document.getElementById('friends-area');
+
+        let activeId = null;
+        let isActiveDM = true;
+        let replyingToId = null;
+
+        function loadDMs() {
+            isActiveDM = true;
+            document.querySelectorAll('.guild-icon').forEach(el => el.classList.remove('active'));
+            document.getElementById('dm-nav-btn').classList.add('active');
+            sidebarHeader.innerHTML = '<button class="search-btn">Find or start a conversation</button>';
+            socket.emit('requestSidebar', null);
+        }
+
+        function openFriends() {
+            chatArea.style.display = 'none';
+            friendsArea.style.display = 'flex';
+            socket.emit('requestFriends');
+        }
+
+        function closeFriends() {
+            friendsArea.style.display = 'none';
+            chatArea.style.display = 'flex';
+        }
+
+        let allFriends = { accepted: [], pending: [] };
+        let currentTab = 'online';
+
+        socket.on('friendsData', (data) => {
+            allFriends = data;
+            renderFriends();
+            
+            // Update Active Now sidebar
+            const activeNow = document.getElementById('active-now-list');
+            activeNow.innerHTML = '';
+            const playing = allFriends.accepted.filter(f => f.activity);
+            if (playing.length === 0) {
+                activeNow.innerHTML = '<div class="empty-active">It\'s quiet for now...</div>';
+            } else {
+                playing.forEach(f => {
+                    const div = document.createElement('div');
+                    div.className = 'active-item';
+                    div.innerHTML = `<img src="${f.avatar}" class="small-avatar"><div class="active-details"><div class="active-name">${f.name}</div><div class="active-activity">Playing ${f.activity}</div></div>`;
+                    activeNow.appendChild(div);
+                });
+            }
+        });
+
+        function renderFriends() {
+            const list = document.getElementById('friends-list');
+            list.innerHTML = '';
+            let filtered = [];
+            
+            if (currentTab === 'online') {
+                filtered = allFriends.accepted.filter(f => f.status !== 'offline');
+                document.getElementById('friends-online-count').innerText = `Online — ${filtered.length}`;
+            } else if (currentTab === 'all') {
+                filtered = allFriends.accepted;
+                document.getElementById('friends-online-count').innerText = `All Friends — ${filtered.length}`;
+            } else if (currentTab === 'pending') {
+                filtered = allFriends.pending;
+                document.getElementById('friends-online-count').innerText = `Pending Requests — ${filtered.length}`;
+            }
+
+            filtered.forEach(f => {
+                const div = document.createElement('div');
+                div.className = 'friends-row';
+                const isPending = f.friendStatus.startsWith('pending');
+                
+                div.innerHTML = `
+                    <div class="f-info">
+                        <img src="${f.avatar}" class="small-avatar">
+                        <div class="f-details">
+                            <div class="f-name">${f.name}</div>
+                            <div class="f-status ${f.status}">${isPending ? (f.friendStatus === 'pending_outgoing' ? 'Outgoing Request' : 'Incoming Request') : (f.activity ? `Playing ${f.activity}` : f.status)}</div>
+                        </div>
+                    </div>
+                    <div class="f-actions">
+                        ${f.friendStatus === 'pending_incoming' ? `
+                            <div class="action-circle" onclick="socket.emit('acceptFriend', '${f.id}')" title="Accept">✅</div>
+                            <div class="action-circle" onclick="socket.emit('declineFriend', '${f.id}')" title="Decline">❌</div>
+                        ` : `
+                            <div class="action-circle" onclick="startDM('${f.id}', '${f.name}')" title="Message">💬</div>
+                            <div class="action-circle" onclick="socket.emit('declineFriend', '${f.id}')" title="Remove">❌</div>
+                        `}
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        document.querySelectorAll('.f-tab').forEach(tab => {
+            tab.onclick = () => {
+                if (tab.classList.contains('add')) return;
+                document.querySelectorAll('.f-tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentTab = tab.innerText.toLowerCase();
+                renderFriends();
+            };
+        });
+
+        function loadServer(id, name) {
+            isActiveDM = false;
+            closeFriends();
+            document.querySelectorAll('.guild-icon').forEach(el => el.classList.remove('active'));
+            const el = document.getElementById(`guild-${id}`);
+            if (el) el.classList.add('active');
+            sidebarHeader.innerHTML = `<h3>${name}</h3>`;
+            socket.emit('requestSidebar', id);
+        }
+
+        function setReply(id, author) {
+            replyingToId = id;
+            replyText.innerText = `Replying to @${author}`;
+            replyPreview.style.display = 'flex';
+            messageInput.focus();
+        }
+
+        function cancelReply() {
+            replyingToId = null;
+            replyPreview.style.display = 'none';
+        }
+
+        function startDM(id, name) {
+            loadDMs();
+            switchChannel(id, name, true);
+        }
+
+        function addPerson() {
+            const id = prompt("User ID:");
+            if (id) {
+                socket.emit('addFriend', id);
+                switchChannel(id, "User", true);
+            }
+        }
+
+        function closeDM(id) {
+            socket.emit('removeDM', id);
+        }
+
+        function openProfile(userId) {
+            socket.emit('getUserProfile', userId);
+        }
+
+        function closeProfile() {
+            document.getElementById('profile-popout').style.display = 'none';
+        }
+
+        socket.on('userProfileData', (data) => {
+            document.getElementById('p-banner').style.background = data.bannerColor;
+            document.getElementById('p-avatar').src = data.avatar;
+            document.getElementById('p-display-name').innerText = data.displayName;
+            document.getElementById('p-username').innerText = data.username;
+            document.getElementById('p-mutual-servers').innerText = `${data.mutualServers} Mutual Servers`;
+            document.getElementById('p-quick-dm').placeholder = `Message @${data.username}`;
+            document.getElementById('p-add-trigger').onclick = () => socket.emit('addFriend', data.id);
+            document.getElementById('p-quick-dm').onkeydown = (e) => { if (e.key === 'Enter') { startDM(data.id, data.username); closeProfile(); } };
+            document.getElementById('profile-popout').style.display = 'block';
+        });
+
+        socket.on('initData', (data) => {
+            guildList.innerHTML = '';
+            data.guilds.forEach(g => {
+                const div = document.createElement('div');
+                div.className = 'guild-icon';
+                div.id = `guild-${g.id}`;
+                div.innerHTML = `<img src="${g.icon}" width="48">`;
+                div.onclick = () => loadServer(g.id, g.name);
+                guildList.appendChild(div);
+            });
+            loadDMs();
+        });
+
+        socket.on('refreshSidebar', () => { if (isActiveDM) socket.emit('requestSidebar', null); });
+
+        socket.on('sidebarUpdate', (data) => {
+            sidebarContent.innerHTML = '';
+            if (data.type === 'dm') {
+                data.items.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'sidebar-item';
+                    div.innerHTML = `<span>${item.icon}</span> ${item.name}`;
+                    if (item.id === 'friends') div.onclick = openFriends;
+                    sidebarContent.appendChild(div);
+                });
+                const header = document.createElement('div');
+                header.className = 'category-header';
+                header.innerHTML = `DIRECT MESSAGES <span onclick="addPerson()" style="float:right;cursor:pointer;font-size:16px;">+</span>`;
+                sidebarContent.appendChild(header);
+                data.dms.forEach(dm => {
+                    const div = document.createElement('div');
+                    div.className = `sidebar-item dm ${dm.unreadCount > 0 ? 'unread' : ''} ${activeId === dm.id ? 'active' : ''}`;
+                    div.innerHTML = `
+                        <div class="dm-content" onclick="switchChannel('${dm.id}', '${dm.name}', true)">
+                            <img src="${dm.avatar}" class="small-avatar" onclick="event.stopPropagation(); openProfile('${dm.id}')"> 
+                            <span class="dm-name">${dm.name}</span> 
+                            ${dm.unreadCount > 0 ? `<span class="unread-badge">${dm.unreadCount}</span>` : ''}
+                        </div>
+                        <div class="close-dm" onclick="event.stopPropagation(); closeDM('${dm.id}')">✕</div>
+                    `;
+                    sidebarContent.appendChild(div);
+                });
+            } else {
+                data.categories.forEach(cat => {
+                    const h = document.createElement('div'); h.className = 'category-header'; h.innerText = cat.name;
+                    sidebarContent.appendChild(h);
+                    cat.channels.forEach(ch => {
+                        const div = document.createElement('div'); div.className = `sidebar-item ${activeId === ch.id ? 'active' : ''}`;
+                        div.innerHTML = `# ${ch.name}`;
+                        div.onclick = () => switchChannel(ch.id, ch.name, false);
+                        sidebarContent.appendChild(div);
+                    });
+                });
+            }
+        });
+
+        function switchChannel(id, name, isDM) {
+            activeId = id; isActiveDM = isDM;
+            closeFriends();
+            currentChannelName.innerText = name;
+            document.getElementById('header-icon').innerText = isDM ? '@' : '#';
+            messageInput.placeholder = `Message ${isDM ? '@' : '#'}${name}`;
+            messageInput.disabled = false;
+            if (isDM) socket.emit('markAsRead', id);
+            chatWindow.innerHTML = '<div class="system-message">Loading...</div>';
+            socket.emit('getHistory', id);
+        }
+
+        socket.on('history', (data) => { if (data.id === activeId) { chatWindow.innerHTML = ''; data.history.forEach(renderMessage); chatWindow.scrollTop = chatWindow.scrollHeight; } });
+
+        socket.on('discordMessage', (data) => { if (data.channelId === activeId || data.authorId === activeId || data.recipientId === activeId) { renderMessage(data); chatWindow.scrollTop = chatWindow.scrollHeight; } });
+
+        function renderMessage(data) {
+            const div = document.createElement('div');
+            div.className = `message ${data.isMentioned ? 'mentioned' : ''}`;
+            let html = '';
+            if (data.referencedMessage) {
+                html += `
+                    <div class="reply-line">
+                        <img src="${data.referencedMessage.authorAvatar}" class="mini-avatar">
+                        <span class="reply-author">@${data.referencedMessage.author}</span>
+                        <span class="reply-text">${data.referencedMessage.content}</span>
+                    </div>`;
+            }
+            html += `<img src="${data.avatar}" class="avatar profile-click" data-uid="${data.authorId}"><div class="content-wrap"><div class="msg-header"><span class="author profile-click" data-uid="${data.authorId}">${data.author}</span><span class="time">${data.timestamp}</span><div class="msg-actions"><span class="text-action-btn" id="reply-${data.id}">REPLY</span><span class="text-action-btn" id="dm-${data.id}">DM</span></div></div><div class="text">${data.content}</div></div>`;
+            div.innerHTML = html;
+            chatWindow.appendChild(div);
+            div.querySelectorAll('.profile-click').forEach(el => el.onclick = () => openProfile(el.dataset.uid));
+            document.getElementById(`reply-${data.id}`).onclick = () => setReply(data.id, data.author);
+            document.getElementById(`dm-${data.id}`).onclick = () => startDM(data.authorId, data.author);
+        }
+
+        // ═══════════════════════════════════════
+        // MENTION AUTOCOMPLETE SYSTEM
+        // ═══════════════════════════════════════
+        const mentionPopup = document.getElementById('mention-popup');
+        let mentionMap = {};  // { '@username': '<@id>' }
+        let mentionActive = false;
+        let mentionStart = -1;
+        let selectedMentionIdx = 0;
+        let currentMembers = [];
+
+        messageInput.addEventListener('input', () => {
+            const val = messageInput.value;
+            const cursor = messageInput.selectionStart;
+            // Find the last @ before cursor
+            const before = val.substring(0, cursor);
+            const atIdx = before.lastIndexOf('@');
+
+            if (atIdx >= 0 && (atIdx === 0 || before[atIdx - 1] === ' ')) {
+                const query = before.substring(atIdx + 1);
+                if (query.indexOf(' ') === -1) {
+                    mentionActive = true;
+                    mentionStart = atIdx;
+                    selectedMentionIdx = 0;
+                    socket.emit('getChannelMembers', { channelId: activeId, isDM: isActiveDM, query });
+                    return;
+                }
+            }
+            hideMentionPopup();
+        });
+
+        messageInput.addEventListener('keydown', (e) => {
+            if (!mentionActive || currentMembers.length === 0) return;
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                selectedMentionIdx = (selectedMentionIdx + 1) % currentMembers.length;
+                renderMentionPopup(currentMembers);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                selectedMentionIdx = (selectedMentionIdx - 1 + currentMembers.length) % currentMembers.length;
+                renderMentionPopup(currentMembers);
+            } else if (e.key === 'Tab' || e.key === 'Enter') {
+                if (mentionActive) {
+                    e.preventDefault();
+                    selectMention(currentMembers[selectedMentionIdx]);
+                }
+            } else if (e.key === 'Escape') {
+                hideMentionPopup();
+            }
+        });
+
+        socket.on('channelMembers', (members) => {
+            currentMembers = members;
+            if (members.length > 0 && mentionActive) {
+                renderMentionPopup(members);
+            } else {
+                hideMentionPopup();
+            }
+        });
+
+        function renderMentionPopup(members) {
+            mentionPopup.innerHTML = '';
+            members.forEach((m, i) => {
+                const div = document.createElement('div');
+                div.className = `mention-item ${i === selectedMentionIdx ? 'selected' : ''}`;
+                div.innerHTML = `<img src="${m.avatar}" class="mention-avatar"><div class="mention-info"><span class="mention-name">${m.displayName || m.username}</span><span class="mention-tag">${m.username}</span></div>`;
+                div.onmouseenter = () => { selectedMentionIdx = i; renderMentionPopup(members); };
+                div.onclick = () => selectMention(m);
+                mentionPopup.appendChild(div);
+            });
+            mentionPopup.style.display = 'block';
+        }
+
+        function selectMention(member) {
+            const val = messageInput.value;
+            const before = val.substring(0, mentionStart);
+            const after = val.substring(messageInput.selectionStart);
+            const mentionText = `@${member.username} `;
+            messageInput.value = before + mentionText + after;
+            mentionMap[`@${member.username}`] = `<@${member.id}>`;
+            hideMentionPopup();
+            messageInput.focus();
+        }
+
+        function hideMentionPopup() {
+            mentionActive = false;
+            mentionPopup.style.display = 'none';
+            currentMembers = [];
+        }
+
+        // ═══════════════════════════════════════
+        // MESSAGE SENDING (with mention conversion)
+        // ═══════════════════════════════════════
+        document.getElementById('message-form').onsubmit = (e) => {
+            e.preventDefault();
+            let content = messageInput.value.trim();
+            if (content && activeId) {
+                // Replace @username mentions with <@id>
+                for (const [text, id] of Object.entries(mentionMap)) {
+                    content = content.replaceAll(text, id);
+                }
+                socket.emit('webMessage', { channelId: activeId, content, isDM: isActiveDM, replyTo: replyingToId });
+                messageInput.value = '';
+                mentionMap = {};
+                cancelReply();
+                hideMentionPopup();
+            }
+        };
+    </script>
+
+</body>
+</html>
